@@ -1,0 +1,104 @@
+---
+title: "Adjusting for Covariates"
+author: "dfermin"
+date: "3/25/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+This markdown describes how to adjust for known covariates in an omics data set.
+
+```{r}
+suppressMessages(library(dplyr))
+suppressMessages(library(ggplot2))
+suppressMessages(library(cancerdata))
+```
+
+## 1. Load example data set
+To learn more about this data go to [http://www.bioconductor.org/packages/release/data/experiment/html/cancerdata.html](http://www.bioconductor.org/packages/release/data/experiment/html/cancerdata.html)
+
+Each sample has 3 variable:
+
+- age
+- survival
+- erp
+
+This code loads the data and creates the necessary expression matrix and phenotype data.frame
+```{r, error=F, warning=F, message=F}
+
+data(VEER1)
+
+pheno <- pData(VEER1)
+j <- which(pheno$class == "NODM")
+k <- which(pheno$class == "DM")
+pheno$age <- NA
+pheno$survival <- NA
+pheno$erp <- NA
+
+pheno$age[j] <- sapply(as.character(pheno$info[j]), function(x) { as.numeric(strsplit(x, split="\\.")[[1]][11]) })
+pheno$survival[j] <- sapply(as.character(pheno$info[j]), function(x) { as.numeric(strsplit(x, split="\\.")[[1]][7]) })
+pheno$erp[j] <- sapply(as.character(pheno$info[j]), function(x) { strsplit(x, split="\\.")[[1]][14] })
+
+pheno$age[k] <- sapply(as.character(pheno$info[k]), function(x) { as.numeric(strsplit(x, split="\\.")[[1]][12]) })
+pheno$survival[k] <- sapply(as.character(pheno$info[k]), function(x) { as.numeric(strsplit(x, split="\\.")[[1]][8]) })
+pheno$erp[k] <- sapply(as.character(pheno$info[k]), function(x) { strsplit(x, split="\\.")[[1]][15] })
+
+pheno$erp <- as.factor(pheno$erp)
+pheno$class <- as.factor(pheno$class)
+
+pheno <- select(pheno, -info) ## don't need this anymore
+rownames(pheno) <- paste0("Sample", seq(nrow(pheno)))
+
+mat <- exprs(VEER1)
+mat <- mat[grep("NM_", rownames(mat)),]
+colnames(mat) <- paste0("Sample", seq(ncol(mat)))
+
+## remove rows of 'mat' that contain NaN
+rs <- apply(mat, 1, sum)
+j <- which(is.nan(rs))
+mat <- mat[-j,]
+
+
+print(head(pheno))
+
+print(mat[1:5,1:8])
+```
+
+## 2. Adjust for 3 variables
+
+We will use linear regression to adjust for the 3 variables mentioned above.
+We use the observed expression data in `mat` as the **outcome** variable in the model.
+You have to do this for each sample in the matrix.
+
+If the expression matrix is really large you can speed this up using the `doParallel` package.
+```{r}
+
+out <- mat
+out[, 1:ncol(out) ] <- NA
+
+nr <- nrow(mat)
+for(j in 1:nr) {
+  
+  ## create a data.frame where each row is one patient
+  ## The Y variable is the observed expression data for the current gene
+  ## at row 'j' of 'mat'
+  tmpX <- data.frame(Y=mat[j,], dplyr::select(pheno, -class))
+  
+  ## run linear regression with the expression value as the response variable
+  tmp.fit <- lm(Y ~ ., data=tmpX)
+
+  ## the residuals of the linear model 'tmp.fit' are the data adjusted for the 
+  ## covariates we are concerned about. In this case 'age', 'erp' and 'survival'
+  out[j,] <- round(residuals(tmp.fit), 4)
+}
+
+
+## 'out' has the expression data after adjusting for age, erp and survival
+
+print(out[1:5,1:8])
+```
+
